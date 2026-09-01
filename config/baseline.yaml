@@ -4,7 +4,7 @@ data:
   sample_rate: 16000
   resolution: 0.16
   max_label_len: 25
-  batch_size: 16
+  batch_size: 4
   num_workers: 4
   debug_mode: false
   max_samples: null
@@ -13,7 +13,7 @@ data:
 model:
   ssl_encoder: "wavlm_large"
   ssl_ckpt: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/NCKH/SAL/data/pretrain/WavLM-Large.pt"
-  ssl_mode: "s3prl"
+  ssl_mode: "s3prl_weighted"
   hid_dim: 1024
   freeze_ssl: true
   conformer_layers: 2
@@ -38,6 +38,8 @@ loss:
 # Training Hyperparameters
 training:
   max_epochs: 30
+  batch_size: 4
+  accumulate_grad_batches: 4
   learning_rate: 0.0001
   weight_decay: 0.0001
   scheduler: "cosine"
@@ -45,7 +47,7 @@ training:
   gradient_clip_val: 1.0
   accelerator: "gpu"
   devices: 1
-  precision: "32-true"
+  precision: "16-mixed"
   seed: 42
 
 # Logging & Checkpoints

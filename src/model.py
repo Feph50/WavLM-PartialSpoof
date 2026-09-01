@@ -57,6 +57,9 @@ class WavLMEncoder(BaseSSLEncoder):
                 import s3prl.hub as hub
                 self.ssl_model = hub.wavlm_local(ckpt=ckpt)
 
+            if self.mode == "s3prl_weighted":
+                self.weight_layer = nn.Parameter(torch.ones(25) / 25)
+
         elif self.mode in ("hf", "huggingface"):
             import warnings
             with warnings.catch_warnings():
@@ -69,6 +72,15 @@ class WavLMEncoder(BaseSSLEncoder):
 
         if freeze_ssl:
             self.freeze()
+
+    def freeze(self) -> None:
+        """Freeze SSL backbone parameters while keeping learnable layer weights active if present."""
+        if hasattr(self, "ssl_model"):
+            for param in self.ssl_model.parameters():
+                param.requires_grad = False
+            self.ssl_model.eval()
+        else:
+            super().freeze()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -83,12 +95,20 @@ class WavLMEncoder(BaseSSLEncoder):
         # Pad to avoid boundary edge distortions
         x = F.pad(x, (0, 256), mode="constant", value=0.0)
 
-        if self.mode == "s3prl":
+        if self.mode in ("s3prl", "s3prl_weighted"):
             if self.freeze_ssl:
                 with torch.no_grad():
-                    out = self.ssl_model(x)["hidden_states"][-1]
+                    hidden_states = self.ssl_model(x)["hidden_states"]
             else:
-                out = self.ssl_model(x)["hidden_states"][-1]
+                hidden_states = self.ssl_model(x)["hidden_states"]
+
+            if self.mode == "s3prl_weighted":
+                # Learnable weighted sum of all 25 layers (CNN + 24 Transformer layers)
+                out = torch.stack(hidden_states, dim=0)          # [25, B, T, D]
+                out = out * self.weight_layer.view(-1, 1, 1, 1)  # Scale each layer
+                out = out.sum(dim=0)                             # [B, T, D]
+            else:
+                out = hidden_states[-1]
             return out
         else:
             if self.freeze_ssl:

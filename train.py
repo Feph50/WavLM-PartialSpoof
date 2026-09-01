@@ -214,6 +214,7 @@ class ExperimentRunner:
             max_epochs=self.cfg["training"]["max_epochs"],
             accelerator=accelerator,
             devices=self.cfg["training"].get("devices", 1) if accelerator != "cpu" else "auto",
+            accumulate_grad_batches=self.cfg["training"].get("accumulate_grad_batches", 1),
             precision=self.cfg["training"].get("precision", "32-true"),
             gradient_clip_val=self.cfg["training"].get("gradient_clip_val", 1.0),
             logger=False,
