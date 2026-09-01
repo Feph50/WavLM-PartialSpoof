@@ -1,0 +1,54 @@
+# Data Configuration (References SAL PartialSpoof data)
+data:
+  root: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/NCKH/SAL/data/PartialSpoof"
+  sample_rate: 16000
+  resolution: 0.16
+  max_label_len: 25
+  batch_size: 16
+  num_workers: 4
+  debug_mode: false
+  max_samples: null
+
+# Model Configuration
+model:
+  ssl_encoder: "wavlm_large"
+  ssl_ckpt: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/NCKH/SAL/data/pretrain/WavLM-Large.pt"
+  ssl_mode: "s3prl"
+  hid_dim: 1024
+  freeze_ssl: true
+  conformer_layers: 2
+  conformer_heads: 4
+  conformer_kernel_size: 31
+  conformer_ffn_hidden: 1024
+  conformer_dropout: 0.1
+  use_relative_pos: false
+  resolution_train: 0.16
+  resolution_test: 0.16
+  pool: "att"
+  pool_heads: 1
+  num_classes: 2
+
+# Loss Configuration
+loss:
+  lambda_contrastive: 0.5
+  margin: 1.0
+  alpha_intra: 1.0
+  beta_inter: 1.0
+
+# Training Hyperparameters
+training:
+  max_epochs: 30
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  warmup_epochs: 2
+  gradient_clip_val: 1.0
+  accelerator: "gpu"
+  devices: 1
+  precision: "32-true"
+  seed: 42
+
+# Logging & Checkpoints
+logging:
+  log_dir: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/NCKH/WavLM/logs"
+  experiment_name: "wavlm_conformer_contrastive"
