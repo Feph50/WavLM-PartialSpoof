@@ -119,3 +119,15 @@ CUDA_VISIBLE_DEVICES=0 taskset -c 0 nohup python3 train.py --config config/basel
 ```bash
 python3 train.py --config config/baseline.yaml --test_only --ckpt_path logs/wavlm_conformer_contrastive/run1/checkpoints/best_eer_epoch=29_val_eer=15.20.ckpt
 ```
+
+---
+
+## 5. Kết quả Thực nghiệm (Test Split - PartialSpoof)
+
+| Cấu hình mô hình | EER (%) ↓ | F1 (%) ↑ | Accuracy (%) ↑ | Test Loss ↓ | Log nguồn |
+|---|---|---|---|---|---|
+| **Baseline:** WavLM (Layer cuối) + Conformer + Contrastive Loss | **7.2019%** | **93.0565%** | 92.8106% | 0.5946 | [`run9/test_results.txt`](logs/wavlm_conformer_contrastive/run9/test_results.txt) |
+| **WavLM (Layer Weighting 25 layers)** + Conformer + Contrastive Loss | **5.9290%** | **93.9049%** | 93.6047% | 0.5744 | [`run13/test_results.txt`](logs/wavlm_conformer_contrastive/run13/test_results.txt) |
+
+> **Nhận xét:** Thay thế việc chỉ lấy Layer cuối bằng cơ chế **Learnable Layer Weighting** (trọng số tự học cho toàn bộ 25 layers) giúp giảm đáng kể EER từ **7.2019%** xuống **5.9290%** (giảm ~1.27% EER) và cải thiện F1-score từ **93.0565%** lên **93.9049%**.
+
