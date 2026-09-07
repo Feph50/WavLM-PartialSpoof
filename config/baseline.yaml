@@ -1,6 +1,6 @@
 # Data Configuration (References SAL PartialSpoof data)
 data:
-  root: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/NCKH/SAL/data/PartialSpoof"
+  root: "/kaggle/input/datasets/noahtran6/partialspoof/data/PartialSpoof"
   sample_rate: 16000
   resolution: 0.16
   max_label_len: 25
@@ -12,7 +12,7 @@ data:
 # Model Configuration
 model:
   ssl_encoder: "wavlm_large"
-  ssl_ckpt: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/NCKH/SAL/data/pretrain/WavLM-Large.pt"
+  ssl_ckpt: "/kaggle/input/datasets/noahtran6/partialspoof/data/pretrain/WavLM-Large.pt"
   ssl_mode: "s3prl_weighted"
   hid_dim: 1024
   freeze_ssl: true
@@ -52,5 +52,5 @@ training:
 
 # Logging & Checkpoints
 logging:
-  log_dir: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/NCKH/WavLM/logs"
+  log_dir: "/kaggle/working/logs"
   experiment_name: "wavlm_conformer_contrastive"

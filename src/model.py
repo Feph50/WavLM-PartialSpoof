@@ -1,5 +1,8 @@
+import io
 import math
 import os
+import contextlib
+import warnings
 from typing import Optional, Tuple, List, Any
 
 import torch
@@ -20,21 +23,17 @@ class BaseSSLEncoder(nn.Module):
         self.freeze_ssl = freeze_ssl
 
     def freeze(self) -> None:
-        """Freeze all encoder parameters."""
         for param in self.parameters():
             param.requires_grad = False
         self.eval()
 
     def unfreeze(self) -> None:
-        """Unfreeze all encoder parameters."""
         for param in self.parameters():
             param.requires_grad = True
 
 
 class WavLMEncoder(BaseSSLEncoder):
-    """
-    WavLM Audio Encoder supporting local s3prl checkpoints and HuggingFace models.
-    """
+    """WavLM Audio Encoder supporting local s3prl checkpoints and HuggingFace models."""
 
     def __init__(
         self,
@@ -50,18 +49,16 @@ class WavLMEncoder(BaseSSLEncoder):
             if ckpt is None or not os.path.exists(ckpt):
                 raise FileNotFoundError(f"Checkpoint not found for s3prl mode: {ckpt}")
             
-            import contextlib
-            import warnings
-            with warnings.catch_warnings(), contextlib.redirect_stdout(None), contextlib.redirect_stderr(None):
+            devnull = io.StringIO()
+            with warnings.catch_warnings(), contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
                 warnings.filterwarnings("ignore")
-                import s3prl.hub as hub
-                self.ssl_model = hub.wavlm_local(ckpt=ckpt)
+                from s3prl.upstream.wavlm.hubconf import wavlm_local
+                self.ssl_model = wavlm_local(ckpt=ckpt)
 
             if self.mode == "s3prl_weighted":
                 self.weight_layer = nn.Parameter(torch.ones(25) / 25)
 
         elif self.mode in ("hf", "huggingface"):
-            import warnings
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore")
                 from transformers import WavLMModel
@@ -74,7 +71,6 @@ class WavLMEncoder(BaseSSLEncoder):
             self.freeze()
 
     def freeze(self) -> None:
-        """Freeze SSL backbone parameters while keeping learnable layer weights active if present."""
         if hasattr(self, "ssl_model"):
             for param in self.ssl_model.parameters():
                 param.requires_grad = False
@@ -83,16 +79,9 @@ class WavLMEncoder(BaseSSLEncoder):
             super().freeze()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x (torch.Tensor): Audio waveform tensor [Batch, Samples] or [Batch, Samples, 1].
-        Returns:
-            torch.Tensor: Feature tensor [Batch, Frames, HiddenDim] (~50 frames/s).
-        """
         if x.ndim == 3:
             x = x[:, :, 0]
 
-        # Pad to avoid boundary edge distortions
         x = F.pad(x, (0, 256), mode="constant", value=0.0)
 
         if self.mode in ("s3prl", "s3prl_weighted"):
@@ -103,7 +92,6 @@ class WavLMEncoder(BaseSSLEncoder):
                 hidden_states = self.ssl_model(x)["hidden_states"]
 
             if self.mode == "s3prl_weighted":
-                # Learnable weighted sum of all 25 layers (CNN + 24 Transformer layers)
                 out = torch.stack(hidden_states, dim=0)          # [25, B, T, D]
                 out = out * self.weight_layer.view(-1, 1, 1, 1)  # Scale each layer
                 out = out.sum(dim=0)                             # [B, T, D]
@@ -124,14 +112,11 @@ class WavLMEncoder(BaseSSLEncoder):
 # ==============================================================================
 
 class Swish(nn.Module):
-    """Swish / SiLU activation: x * sigmoid(x)."""
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x * torch.sigmoid(x)
 
 
 class RelativePositionalEncoding(nn.Module):
-    """Relative Positional Encoding for Conformer Self-Attention."""
-
     def __init__(self, d_model: int, maxlen: int = 1000) -> None:
         super().__init__()
         self.d_model = d_model
@@ -144,8 +129,6 @@ class RelativePositionalEncoding(nn.Module):
 
 
 class MultiHeadSelfAttention(nn.Module):
-    """Multi-Head Self-Attention with optional Relative Positional Encoding."""
-
     def __init__(self, n_units: int, h: int, dropout: float = 0.1) -> None:
         super().__init__()
         self.linearQ = nn.Linear(n_units, n_units)
@@ -177,8 +160,6 @@ class MultiHeadSelfAttention(nn.Module):
 
 
 class ConformerMHA(nn.Module):
-    """Conformer Multi-Head Self-Attention wrapper with LayerNorm, Dropout, Residual."""
-
     def __init__(self, in_size: int = 1024, num_head: int = 4, dropout: float = 0.1) -> None:
         super().__init__()
         self.ln_norm = nn.LayerNorm(in_size)
@@ -195,8 +176,6 @@ class ConformerMHA(nn.Module):
 
 
 class PositionwiseFeedForward(nn.Module):
-    """Conformer Macaron-style Position-wise Feed Forward Layer."""
-
     def __init__(self, in_size: int = 1024, ffn_hidden: int = 1024, dropout: float = 0.1) -> None:
         super().__init__()
         self.ln_norm = nn.LayerNorm(in_size)
@@ -218,11 +197,6 @@ class PositionwiseFeedForward(nn.Module):
 
 
 class ConvolutionModule(nn.Module):
-    """
-    Conformer Convolution Module:
-    LayerNorm -> Pointwise Conv -> GLU -> Depthwise Conv -> BatchNorm -> Swish -> Pointwise Conv -> Dropout
-    """
-
     def __init__(self, channels: int = 1024, kernel_size: int = 31, dropout_rate: float = 0.1) -> None:
         super().__init__()
         assert (kernel_size - 1) % 2 == 0, "Kernel size must be odd"
@@ -244,22 +218,18 @@ class ConvolutionModule(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x
-        x = self.ln_norm(x).transpose(1, 2)  # [B, C, T]
+        x = self.ln_norm(x).transpose(1, 2)
         x = self.pointwise_conv1(x)
         x = self.glu(x)
         x = self.depthwise_conv(x)
         x = self.bn_norm(x)
         x = self.swish(x)
         x = self.pointwise_conv2(x)
-        x = self.dropout(x).transpose(1, 2)  # [B, T, C]
+        x = self.dropout(x).transpose(1, 2)
         return res + x
 
 
 class ConformerBlock(nn.Module):
-    """
-    Single Conformer Block with Macaron-style Feed-Forward, MHA, and Convolution Module.
-    """
-
     def __init__(
         self,
         in_size: int = 1024,
@@ -284,8 +254,6 @@ class ConformerBlock(nn.Module):
 
 
 class ConformerEncoder(nn.Module):
-    """Conformer Backend composed of stacked Conformer blocks."""
-
     def __init__(
         self,
         attention_in: int = 1024,
@@ -329,8 +297,6 @@ class ConformerEncoder(nn.Module):
 # ==============================================================================
 
 class SelfWeightedPooling(nn.Module):
-    """Self-Weighted Attention Pooling for temporal feature aggregation."""
-
     def __init__(self, feature_dim: int, num_head: int = 1) -> None:
         super().__init__()
         self.feature_dim = feature_dim
@@ -353,8 +319,6 @@ class SelfWeightedPooling(nn.Module):
 
 
 class PoolHead(nn.Module):
-    """Downsamples frame-level features (~50 fps) into segment representations."""
-
     def __init__(
         self,
         hid_dim: int,
@@ -397,11 +361,6 @@ class PoolHead(nn.Module):
 # ==============================================================================
 
 class WavLMConformer(nn.Module):
-    """
-    End-to-End WavLM-Conformer Model Architecture.
-    Pipeline: Raw Waveform -> WavLM Encoder -> Conformer Backend -> Pool Head -> Classifier
-    """
-
     def __init__(
         self,
         ssl_encoder: str = "wavlm_large",
@@ -424,7 +383,6 @@ class WavLMConformer(nn.Module):
     ) -> None:
         super().__init__()
 
-        # 1. SSL Audio Encoder
         self.ssl_encoder = WavLMEncoder(
             ckpt=ssl_ckpt,
             mode=ssl_mode,
@@ -432,7 +390,6 @@ class WavLMConformer(nn.Module):
             freeze_ssl=freeze_ssl,
         )
 
-        # 2. Conformer Backend
         self.conformer = ConformerEncoder(
             attention_in=hid_dim,
             ffn_hidden=conformer_ffn_hidden,
@@ -443,7 +400,6 @@ class WavLMConformer(nn.Module):
             use_posi=use_relative_pos,
         )
 
-        # 3. Pooling Head
         self.pool_head = PoolHead(
             hid_dim=hid_dim,
             pool=pool,
@@ -453,7 +409,6 @@ class WavLMConformer(nn.Module):
         )
         self.emb_dim = hid_dim * pool_heads
 
-        # 4. Classification Head
         self.classifier = nn.Sequential(
             nn.SELU(),
             nn.Linear(self.emb_dim, 256),
@@ -462,17 +417,11 @@ class WavLMConformer(nn.Module):
         )
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        """Extract latent segment embeddings [Batch, T_segments, emb_dim]."""
         ssl_feats = self.ssl_encoder(x)
         conformer_feats = self.conformer(ssl_feats)
         return self.pool_head(conformer_feats)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Returns:
-            - logits: [Batch, T_segments, 2] (0 = fake, 1 = real)
-            - embeddings: [Batch, T_segments, emb_dim] (for Contrastive Loss)
-        """
         embeddings = self.forward_features(x)
         logits = self.classifier(embeddings)
         return logits, embeddings
