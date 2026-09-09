@@ -425,3 +425,151 @@ class WavLMConformer(nn.Module):
         embeddings = self.forward_features(x)
         logits = self.classifier(embeddings)
         return logits, embeddings
+
+
+# ==============================================================================
+# 5. Spoof Diarization Baseline Module (Two-Branch Extension)
+# ==============================================================================
+
+class SpoofDiarizationHead(nn.Module):
+    """
+    Diarization Branch Head for Spoof Diarization.
+    Consumes frame-level embeddings from the localization branch (and optionally
+    localization posterior probabilities as conditioning) to produce:
+    1. Method-specific classification logits for known spoofing techniques.
+    2. Normalized latent embeddings for open-set clustering (AHC / K-Means).
+    """
+
+    def __init__(
+        self,
+        in_dim: int = 1024,
+        hidden_dim: int = 256,
+        dia_emb_dim: int = 128,
+        num_classes: int = 10,
+        use_loc_guidance: bool = True,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.use_loc_guidance = use_loc_guidance
+        actual_in_dim = in_dim + (2 if use_loc_guidance else 0)
+
+        self.projector = nn.Sequential(
+            nn.Linear(actual_in_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+        self.emb_head = nn.Linear(hidden_dim, dia_emb_dim)
+        self.classifier = nn.Sequential(
+            nn.Linear(dia_emb_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes),
+        )
+
+    def forward(
+        self,
+        loc_embeddings: torch.Tensor,
+        loc_logits: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            loc_embeddings: [B, T, D] pooled embeddings from localization branch.
+            loc_logits: Optional [B, T, 2] localization logits for soft guidance.
+        Returns:
+            dia_logits: [B, T, num_classes] multi-class logits for spoof methods.
+            dia_embeddings: [B, T, dia_emb_dim] l2-normalized diarization embeddings.
+        """
+        if self.use_loc_guidance:
+            if loc_logits is not None:
+                loc_probs = F.softmax(loc_logits, dim=-1)
+            else:
+                # Fallback neutral probabilities if loc_logits not provided
+                loc_probs = torch.full(
+                    (*loc_embeddings.shape[:-1], 2),
+                    fill_value=0.5,
+                    device=loc_embeddings.device,
+                    dtype=loc_embeddings.dtype,
+                )
+            x = torch.cat([loc_embeddings, loc_probs], dim=-1)
+        else:
+            x = loc_embeddings
+
+        feat = self.projector(x)
+        dia_emb_raw = self.emb_head(feat)
+        dia_embeddings = F.normalize(dia_emb_raw, p=2, dim=-1)
+        dia_logits = self.classifier(dia_embeddings)
+
+        return dia_logits, dia_embeddings
+
+
+class WavLMConformerDiarization(nn.Module):
+    """
+    Two-Branch Baseline Architecture for Spoof Diarization:
+    - Branch 1 (Localization): Pretrained/Trained WavLMConformer (untouched).
+    - Branch 2 (Diarization): SpoofDiarizationHead tapping into localization representations.
+    - LCM Fusion Module: Label-based Countermeasure constraint for inference.
+    """
+
+    def __init__(
+        self,
+        loc_model: WavLMConformer,
+        num_spoof_classes: int = 10,
+        hidden_dim: int = 256,
+        dia_emb_dim: int = 128,
+        use_loc_guidance: bool = True,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.loc_model = loc_model
+        self.diarization_head = SpoofDiarizationHead(
+            in_dim=loc_model.emb_dim,
+            hidden_dim=hidden_dim,
+            dia_emb_dim=dia_emb_dim,
+            num_classes=num_spoof_classes,
+            use_loc_guidance=use_loc_guidance,
+            dropout=dropout,
+        )
+
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Delegates feature extraction to localization model."""
+        return self.loc_model.forward_features(x)
+
+    def forward(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Full two-branch forward pass.
+        Returns:
+            loc_logits: [B, T, 2] (spoof=0, bona=1)
+            loc_embeddings: [B, T, D]
+            dia_logits: [B, T, num_spoof_classes]
+            dia_embeddings: [B, T, dia_emb_dim]
+        """
+        loc_logits, loc_embeddings = self.loc_model(x)
+        dia_logits, dia_embeddings = self.diarization_head(loc_embeddings, loc_logits)
+        return loc_logits, loc_embeddings, dia_logits, dia_embeddings
+
+    def forward_loc(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Runs only the localization branch for full backward compatibility."""
+        return self.loc_model(x)
+
+    @staticmethod
+    def apply_lcm(
+        loc_logits: torch.Tensor,
+        dia_predictions: torch.Tensor,
+        bonafide_idx: int = 1,
+        bonafide_label: int = -1,
+        threshold: float = 0.5,
+    ) -> torch.Tensor:
+        """
+        Label-based Countermeasure Constraint (LCM) Module (Zhang et al. 2024):
+        Preserves bona fide predictions from localization branch.
+        Frames predicted as bona fide by loc_model are assigned bonafide_label (-1).
+        Frames predicted as spoofed retain their diarization label/cluster ID.
+        """
+        probs = F.softmax(loc_logits, dim=-1)
+        is_bonafide = probs[..., bonafide_idx] >= threshold
+        final_timeline = dia_predictions.clone()
+        final_timeline[is_bonafide] = bonafide_label
+        return final_timeline

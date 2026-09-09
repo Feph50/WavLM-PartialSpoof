@@ -176,6 +176,7 @@ class PartialSpoofDataModule(LightningDataModule):
         root: str,
         sample_rate: int = 16000,
         resolution: float = 0.16,
+        label_root: Optional[str] = None,
         max_label_len: int = 25,
         batch_size: int = 16,
         num_workers: int = 4,
@@ -189,6 +190,7 @@ class PartialSpoofDataModule(LightningDataModule):
         self.root = root
         self.sample_rate = sample_rate
         self.resolution = resolution
+        self.label_root = label_root
         self.max_label_len = max_label_len
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -207,6 +209,7 @@ class PartialSpoofDataModule(LightningDataModule):
                 split="train",
                 sample_rate=self.sample_rate,
                 resolution=self.resolution,
+                label_root=self.label_root,
                 max_label_len=self.max_label_len,
                 pad_mode="train",
                 debug_mode=self.debug_mode,
@@ -217,6 +220,7 @@ class PartialSpoofDataModule(LightningDataModule):
                 split="val",
                 sample_rate=self.sample_rate,
                 resolution=self.resolution,
+                label_root=self.label_root,
                 max_label_len=self.max_label_len,
                 pad_mode="eval",
                 debug_mode=self.debug_mode,
@@ -229,6 +233,7 @@ class PartialSpoofDataModule(LightningDataModule):
                 split="test",
                 sample_rate=self.sample_rate,
                 resolution=self.resolution,
+                label_root=self.label_root,
                 max_label_len=self.max_label_len,
                 pad_mode="eval",
                 debug_mode=self.debug_mode,

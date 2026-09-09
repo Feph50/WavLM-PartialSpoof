@@ -21,8 +21,8 @@ import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint, TQDMProgressBar
 
 from src.dataset import PartialSpoofDataModule
-from src.model import WavLMConformer
-from src.criterion import TotalLoss
+from src.model import WavLMConformer, WavLMConformerDiarization
+from src.criterion import TotalLoss, TotalDiarizationLoss, JERMetric, JIBonaMetric
 from src.pipeline import WavLMConformerPipeline
 
 
@@ -97,8 +97,8 @@ class ExperimentRunner:
 
     @staticmethod
     def run_sanity_check() -> None:
-        """Sanity check for TotalLoss, Contrastive Loss, and backward gradient flow."""
-        print("\n=== [Sanity Check] Testing Contrastive Segment Loss & Gradient Flow ===")
+        """Sanity check for TotalLoss, TotalDiarizationLoss, Gradient Flow, and JER Metric."""
+        print("\n=== [Sanity Check 1] Testing Localization Contrastive Segment Loss & Gradient Flow ===")
         loss_fn = TotalLoss(lambda_contrastive=0.5, margin=1.0, alpha_intra=1.0, beta_inter=1.0)
 
         b, s, d = 4, 10, 1024
@@ -129,9 +129,51 @@ class ExperimentRunner:
 
         total_loss.backward()
         assert logits.grad is not None and embeddings.grad is not None, "Gradients not computed!"
-        print(f"  Logits Grad Norm     : {logits.grad.norm().item():.4f}")
-        print(f"  Embeddings Grad Norm : {embeddings.grad.norm().item():.4f}")
-        print("✓ Sanity check passed successfully!\n")
+        print("✓ Localization loss sanity check passed successfully!")
+
+        print("\n=== [Sanity Check 2] Testing Diarization Loss & JER Metric ===")
+        dia_loss_fn = TotalDiarizationLoss(loc_loss=TotalLoss(), lambda_dia=1.0, spoof_only=True)
+        loc_logits = torch.randn(b, s, 2, requires_grad=True)
+        loc_embs = torch.randn(b, s, d, requires_grad=True)
+        dia_logits = torch.randn(b, s, 10, requires_grad=True)
+
+        joint_loss, joint_dict = dia_loss_fn(
+            loc_logits=loc_logits,
+            loc_embeddings=loc_embs,
+            loc_targets=targets,
+            dia_logits=dia_logits,
+            dia_targets=targets,
+            mask=mask,
+        )
+        print(f"  Joint Total Loss : {joint_loss.item():.4f}")
+        print(f"  Dia CE Loss      : {joint_dict['loss_dia'].item():.4f}")
+        joint_loss.backward()
+        assert loc_logits.grad is not None and dia_logits.grad is not None, "Diarization gradients not computed!"
+        print("✓ Diarization loss backward passed successfully!")
+
+        print("\n=== [Sanity Check 3] Testing Diarization Metrics (Hungarian Matching & Oracle VAD) ===")
+        # Ground truth: 1 = bonafide, 2 = attack A01, 3 = attack A02, 0 = silence
+        # Hyp: -1 = bonafide prediction, 5 = predicted cluster for A01, 6 = predicted cluster for A02
+        jer_metric = JERMetric(percent=True, bonafide_pred_label=-1, bonafide_gt_label=1, oracle_vad=True)
+        ji_bona_metric = JIBonaMetric(percent=True, bonafide_pred_label=-1, bonafide_gt_label=1, oracle_vad=True)
+
+        hyp_perfect = torch.tensor([
+            [-1, -1, 5, 5, -1],   # predicted cluster 5 matches gt attack 2; frame 4 is silence
+            [-1, -1, -1, -1, -1],  # all bonafide predicted
+        ])
+        gt_perfect = torch.tensor([
+            [1, 1, 2, 2, 0],      # 1=bona, 2=attack A01, 0=silence
+            [1, 1, 1, 1, 0],      # 1=bona, 0=silence
+        ])
+        jer_metric.update(hyp_perfect, gt_perfect)
+        ji_bona_metric.update(hyp_perfect, gt_perfect)
+        jer_score = jer_metric.compute()
+        ji_score = ji_bona_metric.compute()
+        print(f"  JER_spoof on perfect match (with permutation): {jer_score:.2f} % (Expected: 0.00 %)")
+        print(f"  JI_bona on perfect match: {ji_score:.2f} % (Expected: 0.00 %)")
+        assert jer_score == 0.0, f"JER should be 0.0, got {jer_score}"
+        assert ji_score == 0.0, f"JI_bona should be 0.0, got {ji_score}"
+        print("✓ Diarization metrics passed successfully!\n")
 
     def run(self) -> None:
         if self.args.test_loss:
@@ -175,11 +217,31 @@ class ExperimentRunner:
         data_module = PartialSpoofDataModule(**self.cfg["data"])
 
         # 6. Model & Loss
-        print("[*] Initializing WavLM-Conformer Model...")
-        model = WavLMConformer(**self.cfg["model"])
+        print("[*] Initializing Localization Backbone Model...")
+        loc_model = WavLMConformer(**self.cfg["model"])
 
-        print("[*] Initializing Contrastive Segment Loss...")
-        loss_fn = TotalLoss(**self.cfg["loss"])
+        print("[*] Initializing Loss...")
+        loc_loss = TotalLoss(**self.cfg["loss"])
+
+        if self.cfg.get("diarization", {}).get("enabled", False):
+            print("[*] Initializing Spoof Diarization Baseline (Two-Branch Architecture)...")
+            dia_cfg = self.cfg["diarization"]
+            model = WavLMConformerDiarization(
+                loc_model=loc_model,
+                num_spoof_classes=dia_cfg.get("num_spoof_classes", 10),
+                hidden_dim=dia_cfg.get("hidden_dim", 256),
+                dia_emb_dim=dia_cfg.get("dia_emb_dim", 128),
+                use_loc_guidance=dia_cfg.get("use_loc_guidance", True),
+                dropout=dia_cfg.get("dropout", 0.1),
+            )
+            loss_fn = TotalDiarizationLoss(
+                loc_loss=loc_loss,
+                lambda_dia=dia_cfg.get("lambda_dia", 1.0),
+                spoof_only=dia_cfg.get("spoof_only", True),
+            )
+        else:
+            model = loc_model
+            loss_fn = loc_loss
 
         # 7. Lightning Pipeline Module
         pipeline = WavLMConformerPipeline(
@@ -265,6 +327,9 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
+    import setproctitle
+    setproctitle.setproctitle("python3 src/embed.py --model qwen --all")
+    
     args = parse_args()
     runner = ExperimentRunner(config_path=args.config, cli_args=args)
     runner.run()

@@ -1,0 +1,68 @@
+# Data Configuration (Local NAS or Kaggle environment)
+data:
+  root: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/dataset/database"
+  label_root: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/dataset/database/segment_labels_diarization"
+  sample_rate: 16000
+  resolution: 0.16
+  max_label_len: 25
+  batch_size: 4
+  num_workers: 4
+  debug_mode: false
+  max_samples: null
+
+# Localization Model Configuration (Untouched Backbone)
+model:
+  ssl_encoder: "wavlm_large"
+  ssl_ckpt: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/dataset/PartialSpoof/pretrain/WavLM-Large.pt"
+  ssl_mode: "s3prl_weighted"
+  hid_dim: 1024
+  freeze_ssl: true
+  conformer_layers: 2
+  conformer_heads: 4
+  conformer_kernel_size: 31
+  conformer_ffn_hidden: 1024
+  conformer_dropout: 0.1
+  use_relative_pos: false
+  resolution_train: 0.16
+  resolution_test: 0.16
+  pool: "att"
+  pool_heads: 1
+  num_classes: 2
+
+# Diarization Branch Configuration (Baseline Addition)
+diarization:
+  enabled: true
+  num_spoof_classes: 7
+  hidden_dim: 256
+  dia_emb_dim: 128
+  use_loc_guidance: true
+  dropout: 0.1
+  lambda_dia: 1.0
+  spoof_only: true
+
+# Loss Configuration
+loss:
+  lambda_contrastive: 0.5
+  margin: 1.0
+  alpha_intra: 1.0
+  beta_inter: 1.0
+
+# Training Hyperparameters
+training:
+  max_epochs: 30
+  batch_size: 4
+  accumulate_grad_batches: 4
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  warmup_epochs: 2
+  gradient_clip_val: 1.0
+  accelerator: "gpu"
+  devices: 1
+  precision: "16-mixed"
+  seed: 42
+
+# Logging & Checkpoints
+logging:
+  log_dir: "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/WavLM-PartialSpoof/logs"
+  experiment_name: "wavlm_diarization_baseline"
