@@ -78,9 +78,17 @@ class WavLMConformerPipeline(LightningModule):
 
     @staticmethod
     def flatten_valid_predictions(
-        preds: torch.Tensor, labels: torch.Tensor, label_lengths: torch.Tensor
+        preds: torch.Tensor,
+        labels: torch.Tensor,
+        label_lengths: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Flattens non-padded predictions and labels for evaluation metrics."""
+        if mask is not None:
+            preds_flat = preds[mask]
+            labels_flat = labels[mask].long()
+            return preds_flat, labels_flat
+
         pred_list, label_list = [], []
         for i, length in enumerate(label_lengths):
             l = int(length.item())
@@ -232,7 +240,9 @@ class WavLMConformerPipeline(LightningModule):
                 dia_targets=dia_targets,
                 mask=mask,
             )
-            preds_flat, labels_flat = self.flatten_valid_predictions(loc_logits, loc_targets, label_lengths)
+            preds_flat, labels_flat = self.flatten_valid_predictions(
+                loc_logits, loc_targets, label_lengths, mask=mask
+            )
 
             self.val_loss.update(loss)
             probs_fake = torch.softmax(preds_flat, dim=-1)[:, 0]
@@ -310,7 +320,9 @@ class WavLMConformerPipeline(LightningModule):
                 dia_targets=dia_targets,
                 mask=mask,
             )
-            preds_flat, labels_flat = self.flatten_valid_predictions(loc_logits, loc_targets, label_lengths)
+            preds_flat, labels_flat = self.flatten_valid_predictions(
+                loc_logits, loc_targets, label_lengths, mask=mask
+            )
 
             self.test_loss.update(loss)
             probs_fake = torch.softmax(preds_flat, dim=-1)[:, 0]

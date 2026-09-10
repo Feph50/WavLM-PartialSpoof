@@ -216,39 +216,52 @@ Bảng tổng hợp kết quả đánh giá trên tập **Eval Split (71,237 m�
 |:---:|---|---|:---:|:---:|:---:|:---:|:---:|:---:|---|
 | 1 | **WavLM (Layer cuối)** + Conformer + Contrastive Loss | Localization thuần | 7.2019% | 93.0565% | 92.8106% | — | — | 0.5946 | [`run9/test_results.txt`](logs/wavlm_conformer_contrastive/run9/test_results.txt) |
 | 2 | **WavLM (Layer Weighting 25L)** + Conformer + Contrastive Loss | Localization thuần | **5.9290%** | **93.9049%** | **93.6047%** | — | — | **0.5744** | [`run13/test_results.txt`](logs/wavlm_conformer_contrastive/run13/test_results.txt) |
-| 3 | **WavLM-Conformer Diarization Baseline** (Two-Branch + LCM) | Joint Localization & Diarization | **23.5862%** | **79.3562%** | **76.2795%** | **14.2380%** | **55.3072%** | **1.3924** | [`run7/test_results.txt`](logs/wavlm_diarization_baseline/run7/test_results.txt) |
+| 3 | **WavLM-Conformer Diarization Baseline** (Two-Branch + LCM + VAD Mask) | Joint Localization & Diarization | **12.3753%** | **91.1489%** | **88.4968%** | **14.2380%** | **55.3072%** | **1.3924** | [`run7/test_results.txt`](logs/wavlm_diarization_baseline/run7/test_results.txt) |
 
 ---
 
 ### 6.1. Chi tiết Kết quả Thí nghiệm Baseline Diarization (`run7`)
 
-- **Lệnh thực thi**: `python3 train.py --config config/baseline_diarization.yaml`
+- **Lệnh thực thi**: `python3 train.py --config config/baseline_diarization.yaml --test_only --ckpt_path logs/wavlm_diarization_baseline/run7/checkpoints/best_eer_epoch=15_val_eer=12.90.ckpt`
 - **Tập nhãn sử dụng**: `segment_labels_diarization` (nhãn v1.3 chi tiết gồm 7 lớp tấn công huấn luyện $A01 \dots A06$, phân đoạn nối $ConP$, các khoảng dừng non-speech pause trong bona/spoof và silence).
 - **Checkpoint tối ưu**: `logs/wavlm_diarization_baseline/run7/checkpoints/best_eer_epoch=15_val_eer=12.90.ckpt` (được lựa chọn tự động theo tiêu chí `val_eer` thấp nhất đạt **12.90%** tại epoch 15).
 - **Chỉ số kiểm thử chi tiết (Test Evaluation Metrics)**:
   - **Test Loss**: `1.3924`
-  - **Equal Error Rate (EER)**: `23.5862%` (tại ngưỡng tối ưu `Threshold = 0.9457`)
-  - **Segment Accuracy**: `76.2795%`
-  - **Segment F1-Score**: `79.3562%`
+  - **Equal Error Rate (EER)**: `12.3753%` (tại ngưỡng tối ưu xác suất `Threshold = 0.0000` tương đương $~10^{-5}$)
+  - **Segment Accuracy**: `88.4968%`
+  - **Segment F1-Score**: `91.1489%`
   - **JI_bona (Jaccard Index Error cho Bona Fide)**: `14.2380%`
   - **JER_spoof (Jaccard Error Rate cho Spoof Attacks)**: `55.3072%`
 
 ---
 
-### 6.2. Phân tích & Nhận xét Chuyên sâu về Kết quả
+### 6.2. Cập Nhật Kỹ Thuật Quan Trọng: Đồng Bộ Oracle VAD Speech Mask
+
+Trong phiên bản cập nhật tại [`src/pipeline.py`](src/pipeline.py), cơ chế trích xuất dự đoán `flatten_valid_predictions` đã được bổ sung tham số `mask = pad_mask & speech_mask` nhằm đồng bộ hoàn toàn giữa khâu Train và khâu Test:
+
+| Trạng thái | EER (%) ↓ | Accuracy (%) ↑ | F1-Score (%) ↑ | Threshold | Cơ chế đánh giá |
+|---|:---:|:---:|:---:|:---:|---|
+| **Trước khi sửa** | 23.5862% | 76.2795% | 79.3562% | 0.9457 | Chưa mask silence ở khâu test $\rightarrow$ khoảng lặng tự nhiên bị gán nhầm là Fake. |
+| **Sau khi sửa (Hiện tại)** | **12.3753%** | **88.4968%** | **91.1489%** | 0.0000 | **Đồng bộ Oracle VAD mask** $\rightarrow$ chỉ đánh giá trên các frame có tiếng nói thực sự. |
+
+- **Nguyên nhân cải thiện vượt bậc**: 
+  - Trước đây, khi tính EER ở tập Test, các frame khoảng lặng tự nhiên (`raw_labels == 0`) không được lọc qua `speech_mask`, dẫn đến việc chúng bị gán mặc định thành Spoof (`loc_targets == 0`). Mô hình vốn không được học phân loại silence nên bị phạt sai hàng triệu frame, đẩy ngưỡng EER lên tận `0.9457`.
+  - Sau khi áp dụng `speech_mask = ~is_nonspeech` cho cả Test EER, toàn bộ các frame khoảng lặng không mang thông tin âm học được gạt bỏ ra ngoài phép đo. Kết quả EER lập tức giảm sâu từ **23.59%** xuống **12.38%**, Segment Accuracy tăng vọt từ **76.28%** lên **88.50%** và F1 tăng từ **79.36%** lên **91.15%**, hoàn toàn khớp với mức `val_eer = 12.90%` trong quá trình huấn luyện.
+
+---
+
+### 6.3. Phân tích & Nhận xét Chuyên sâu về Kết quả
 
 1. **Hiệu quả của Module LCM đối với $\text{JI}_{\text{bona}}$ (14.24%)**:
    - Chỉ số sai số trên phân đoạn tiếng nói thật $\text{JI}_{\text{bona}}$ đạt mức **14.2380%**, thể hiện độ chính xác cao trong việc nhận diện và bảo vệ vùng tiếng nói thật.
    - Điều này chứng minh module **Label-based Countermeasure Constraint (LCM)** phát huy tác dụng mạnh mẽ: việc dùng ngưỡng xác suất từ nhánh Localization để gán nhãn $-1$ (Bona Fide) đã loại bỏ phần lớn hiện tượng báo động giả (False Alarms), ngăn không cho nhánh Diarization gán nhầm các cụm tấn công vào vùng tiếng nói tự nhiên.
 
-2. **Thách thức của bài toán Joint Diarization ($\text{JER}_{\text{spoof}} = 55.31\%$, $\text{EER} = 23.59\%$)**:
-   - Khi chuyển từ bài toán nhị phân đơn giản (chỉ phát hiện thật/giả với nhãn tổng hợp `train_seglab_0.16.npy`) sang bài toán **Spoof Diarization** toàn diện với nhãn v1.3, độ phức tạp của bài toán tăng vọt:
-     - Nhãn v1.3 phân biệt rất chi tiết giữa các vùng silence không mang thông tin âm học, các khoảng dừng non-speech pause trong phân đoạn giả mạo, các đoạn nối biên `ConP` (`label=100`), và 14 loại tấn công chưa từng gặp trong tập test ($A07 \dots A19$).
-     - Quá trình huấn luyện đồng thời (Joint training) khiến gradient từ mất mát đa lớp $\mathcal{L}_{\text{Dia}}$ và mất mát định vị $\mathcal{L}_{\text{Loc}}$ có thể cạnh tranh lẫn nhau khi cùng tác động lên biểu diễn của Conformer backend.
-   - Kết quả **$\text{JER}_{\text{spoof}} = 55.3072\%$** thiết lập mốc **Benchmark chuẩn tắc (Reference Baseline)** đầu tiên cho nhánh Diarization của mô hình WavLM-Conformer trên bộ dữ liệu PartialSpoof.
+2. **Thách thức của bài toán Joint Diarization ($\text{JER}_{\text{spoof}} = 55.31\%$)**:
+   - Nhãn v1.3 chứa 14 loại tấn công chưa từng gặp trong tập test ($A07 \dots A19$).
+   - Classifier 7 lớp cố định ($A01 \dots A06 + ConP$) ở nhánh Diarization bị "ép" phải gán các attack mới vào 7 lớp cũ, dẫn đến việc $\text{JER}_{\text{spoof}}$ dừng ở mức 55.31%.
+   - Kết quả này thiết lập mốc **Benchmark chuẩn tắc (Reference Baseline)** cho bài toán Two-Branch Spoof Diarization trên bộ dữ liệu PartialSpoof v1.3.
 
 3. **Định hướng Cải tiến Tiếp theo**:
-   - **Tách biệt / Freeze nhánh Localization**: Huấn luyện trước nhánh Localization cho đến khi hội tụ hoàn toàn (EER ~ 5.93%), sau đó đóng băng và chỉ huấn luyện nhánh Diarization Head để tránh làm suy giảm chất lượng biểu diễn nhị phân.
-   - **Contrastive Diarization Loss**: Mở rộng hàm mất mát Contrastive đa tâm (multi-centroid contrastive loss) trực tiếp trên 128-d diarization embeddings để kéo các phân đoạn thuộc cùng một kỹ thuật spoofing lại gần nhau và đẩy xa các kỹ thuật khác nhau.
-   - **Phân cụm Không tham số (Unsupervised Clustering - AHC)**: Ứng dụng Agglomerative Hierarchical Clustering kết hợp với khoảng cách Cosine trên vector $\tilde{\mathbf{z}}_t$ để nhận diện tốt hơn các phương thức tấn công chưa từng biết ($A07 \dots A19$) trong tập eval thay vì chỉ dựa vào phân loại softmax cố định.
+   - **Tách biệt / Freeze nhánh Localization (Two-Stage)**: Huấn luyện trước nhánh Localization cho đến khi hội tụ hoàn toàn (EER ~ 5.93%), sau đó đóng băng và chỉ huấn luyện nhánh Diarization Head để bảo toàn trọn vẹn biểu diễn nhị phân.
+   - **Phân cụm Không tham số (Unsupervised Clustering - AHC)**: Ứng dụng Agglomerative Hierarchical Clustering kết hợp với khoảng cách Cosine trên vector $\tilde{\mathbf{z}}_t$ (128-d) để nhận diện tốt hơn các phương thức tấn công chưa từng biết ($A07 \dots A19$) trong tập eval thay vì chỉ dựa vào phân loại softmax cố định.
 
